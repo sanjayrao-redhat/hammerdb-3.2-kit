@@ -1,0 +1,8 @@
+[packages-microsoft-com-mssql-server-preview]
+name=Microsoft SQL Server Preview
+baseurl=https://packages.microsoft.com/rhel/9.0/mssql-server-preview/
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.microsoft.com/keys/microsoft.asc
+sslverify=1

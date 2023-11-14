@@ -1,0 +1,121 @@
+disks=none
+mountpoint=none
+
+usage()
+{
+  echo "Usage:
+        ./Hammerdb-mssql-install-script [-h] [-d disk name] [-m mount point] 
+
+        Usage:
+        -h help
+        -d <disk device name>
+        -m <mount point>
+
+
+       Examples:
+        ./Hammerdb-mssql-install-script -d '/dev/sdb' 
+        ./Hammerdb-mssql-install-script -d '/perf1' 
+  "
+}
+if [ $# -eq 0 ]
+then
+    usage;
+    exit;
+fi
+
+while [ $# -gt 0 ]
+do
+case $1 in
+        -h) usage;
+            exit;
+            ;;
+        -d) disks=$2
+            shift 2
+            ;;
+        -m) mountpoint=$2
+            shift 2
+            ;;
+         *) usage;
+            exit;
+            ;;
+esac
+done
+
+setenforce 0
+
+curl -o /tmp/hammerdb-tpcc.tar http://people.redhat.com/srao/Hammerdb-Kit/hammerdb-tpcc.tar
+cd /tmp
+tar xf hammerdb-tpcc.tar
+cd /tmp/hammerdb-tpcc/Hammerdb
+unset DISPLAY
+echo "y" > input
+echo "/usr/local/HammerDB" >> input
+./HammerDB-3.2-Linux-x86-64-Install < input
+
+# Installing MSSQL Server and tools
+cp /tmp/hammerdb-tpcc/mssql-repo-2019.repo /etc/yum.repos.d
+yum -y install mssql-server
+curl https://packages.microsoft.com/config/rhel/7/prod.repo > /etc/yum.repos.d/msprod.repo
+yum -y remove unixODBC-utf16 unixODBC-utf16-devel
+ACCEPT_EULA=Y yum install -y mssql-tools unixODBC-devel
+echo 'export PATH="$PATH:/opt/mssql-tools/bin"' >> ~/.bash_profile
+cd /usr/local/HammerDB
+cp -R  /tmp/hammerdb-tpcc/mssql/* .
+
+# Shutdown any running instances
+systemctl stop mssql-server
+systemctl stop mariadb
+systemctl stop postgresql
+
+if [[ $mountpoint == *"none"* ]]; then
+  echo "using disk option"
+  umount /perf1
+  mkfs.xfs -f ${disks}
+  mkdir -p /perf1
+  mount ${disks} /perf1
+  mountpoint="/perf1"
+else
+  echo "using mountpoint option"
+  echo ${mountpoint}
+fi
+
+rm -rf ${mountpoint}/mssql_data/*
+mkdir -p ${mountpoint}/mssql_data
+chown -R mssql:mssql ${mountpoint}/mssql_data 
+chown -R mssql:mssql /perf1/mssql_data
+
+systemctl stop mssql-server
+
+cd /opt/mssql/bin/
+mkdir /var/opt/mssql/secrets/
+
+MSSQL_SA_PASSWORD="100yard-"
+export MSSQL_SA_PASSWORD
+
+rm -rf /var/opt/mssql
+chmod 777 /var/opt
+
+
+echo 1 > input
+echo Yes >> input
+echo 100yard- >> input
+echo 100yard- >> input
+
+./mssql-conf -n setup accept-eula < input
+
+sleep 30
+systemctl stop mssql-server
+
+cd /var/opt/mssql
+mv data ${mountpoint}/mssql_data
+ln -sf ${mountpoint}/mssql_data/data .
+
+systemctl disable mssql-server.service
+systemctl restart mssql-server.service
+
+cd /usr/local/HammerDB
+
+./createdb_mssql_mnt.sh -m ${mountpoint} > crdb.out 2>&1
+
+./update_temp_mnt.sh -m ${mountpoint} > upd_tmp.out 2>&1
+
